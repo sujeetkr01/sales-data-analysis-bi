@@ -1,0 +1,229 @@
+-- =============================================================================
+-- PRODUCTION DAX MEASURE LIBRARY FOR GLOBAL SUPERSTORE
+-- File: powerbi/01_dax_measures.dax
+-- Best Practice: Place in a dedicated measure table called '_Measures'
+-- =============================================================================
+
+// =============================================================================
+// 1. DATE TABLE GENERATION (DAX CALCULATED TABLE)
+// =============================================================================
+Dim_Date = 
+ADDCOLUMNS (
+    CALENDAR ( DATE ( 2015, 1, 1 ), DATE ( 2018, 12, 31 ) ),
+    "Date_Key", INT ( FORMAT ( [Date], "YYYYMMDD" ) ),
+    "Year", YEAR ( [Date] ),
+    "Quarter", "Q" & FORMAT ( [Date], "Q" ),
+    "Year_Quarter", YEAR ( [Date] ) & "-Q" & FORMAT ( [Date], "Q" ),
+    "Month_Num", MONTH ( [Date] ),
+    "Month_Name", FORMAT ( [Date], "MMMM" ),
+    "Month_Short", FORMAT ( [Date], "mmm" ),
+    "Year_Month", FORMAT ( [Date], "YYYY-MM" ),
+    "Month_Year_Short", FORMAT ( [Date], "mmm YYYY" ),
+    "Week_Num", WEEKNUM ( [Date], 2 ),
+    "Day_of_Month", DAY ( [Date] ),
+    "Day_of_Week", FORMAT ( [Date], "dddd" ),
+    "Day_of_Week_Short", FORMAT ( [Date], "ddd" ),
+    "Day_of_Week_Num", WEEKDAY ( [Date], 2 ),
+    "Is_Weekend", IF ( WEEKDAY ( [Date], 2 ) >= 6, "Yes", "No" )
+)
+
+
+// =============================================================================
+// 2. CORE BASE MEASURES (FOLDER: 01_Base_Metrics)
+// =============================================================================
+
+// Gross Sales Revenue
+Total Sales = 
+SUM ( Fact_Orders[Sales] )
+
+// Total Net Profit
+Total Profit = 
+SUM ( Fact_Orders[Profit] )
+
+// Total Cost of Goods Sold (COGS)
+Total Cost = 
+[Total Sales] - [Total Profit]
+
+// Blended Profit Margin %
+Profit Margin % = 
+DIVIDE ( [Total Profit], [Total Sales], 0 )
+
+// Total Order Volume (Distinct purchase baskets)
+Total Orders = 
+DISTINCTCOUNT ( Fact_Orders[Order ID] )
+
+// Total Transaction Line Items
+Total Items Sold = 
+COUNTROWS ( Fact_Orders )
+
+// Total Physical Units Fulfilled
+Total Quantity = 
+SUM ( Fact_Orders[Quantity] )
+
+// Unique Customer Accounts
+Total Customers = 
+DISTINCTCOUNT ( Fact_Orders[Customer ID] )
+
+// Average Order Value (AOV)
+Average Order Value = 
+DIVIDE ( [Total Sales], [Total Orders], 0 )
+
+// Average Discount Depth
+Average Discount % = 
+AVERAGE ( Fact_Orders[Discount] )
+
+
+// =============================================================================
+// 3. TIME INTELLIGENCE & YoY / MoM GROWTH (FOLDER: 02_Time_Intelligence)
+// =============================================================================
+
+// Prior Year Sales (SAMEPERIODLASTYEAR)
+Sales PY = 
+CALCULATE (
+    [Total Sales],
+    SAMEPERIODLASTYEAR ( Dim_Date[Date] )
+)
+
+// Year-over-Year Sales Growth ($ Variance)
+Sales YoY $ = 
+IF (
+    NOT ( ISBLANK ( [Sales PY] ) ),
+    [Total Sales] - [Sales PY],
+    BLANK ()
+)
+
+// Year-over-Year Sales Growth (% Rate)
+Sales YoY % = 
+DIVIDE ( [Sales YoY $], [Sales PY], BLANK () )
+
+// Prior Year Profit
+Profit PY = 
+CALCULATE (
+    [Total Profit],
+    SAMEPERIODLASTYEAR ( Dim_Date[Date] )
+)
+
+// Year-over-Year Profit Growth ($ Variance)
+Profit YoY $ = 
+IF (
+    NOT ( ISBLANK ( [Profit PY] ) ),
+    [Total Profit] - [Profit PY],
+    BLANK ()
+)
+
+// Year-over-Year Profit Growth (% Rate)
+Profit YoY % = 
+DIVIDE ( [Profit YoY $], [Profit PY], BLANK () )
+
+// Prior Month Sales (Month-over-Month)
+Sales PM = 
+CALCULATE (
+    [Total Sales],
+    DATEADD ( Dim_Date[Date], -1, MONTH )
+)
+
+// Month-over-Month Sales Growth (% Rate)
+Sales MoM % = 
+DIVIDE ( [Total Sales] - [Sales PM], [Sales PM], BLANK () )
+
+// Year-to-Date (YTD) Sales
+Sales YTD = 
+TOTALYTD ( [Total Sales], Dim_Date[Date] )
+
+// Prior Year-to-Date Sales
+Sales PY YTD = 
+TOTALYTD ( [Total Sales], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+
+// Cumulative Running Total Sales (All Selected Dates)
+Cumulative Sales Running Total = 
+CALCULATE (
+    [Total Sales],
+    FILTER (
+        ALLSELECTED ( Dim_Date ),
+        Dim_Date[Date] <= MAX ( Dim_Date[Date] )
+    )
+)
+
+
+// =============================================================================
+// 4. ROLE-PLAYING INACTIVE RELATIONSHIP NAVIGATION (FOLDER: 03_Logistics_SLA)
+// =============================================================================
+
+// Sales by Ship Date (Navigating Inactive Relationship)
+Sales by Ship Date = 
+CALCULATE (
+    [Total Sales],
+    USERELATIONSHIP ( Fact_Orders[Ship Date], Dim_Date[Date] )
+)
+
+// Average Fulfillment Lead Time (Days)
+Average Shipping Days = 
+AVERAGE ( Fact_Orders[Shipping_Days] )
+
+
+// =============================================================================
+// 5. QUALITY, RETURNS & RISK METRICS (FOLDER: 04_Quality_And_Losses)
+// =============================================================================
+
+// Loss-Making Transaction Count
+Loss-Making Orders Count = 
+CALCULATE (
+    COUNTROWS ( Fact_Orders ),
+    Fact_Orders[Profit] < 0
+)
+
+// Loss-Making Line Item Percentage
+Loss-Making Line % = 
+DIVIDE ( [Loss-Making Orders Count], [Total Items Sold], 0 )
+
+// Returned Orders Count
+Returned Orders Count = 
+CALCULATE (
+    DISTINCTCOUNT ( Fact_Orders[Order ID] ),
+    Fact_Orders[Is_Returned] = "Yes"
+)
+
+// Order Return Rate %
+Return Rate % = 
+DIVIDE ( [Returned Orders Count], [Total Orders], 0 )
+
+// Returned Revenue Impact ($)
+Returned Sales Impact = 
+CALCULATE (
+    [Total Sales],
+    Fact_Orders[Is_Returned] = "Yes"
+)
+
+
+// =============================================================================
+// 6. DYNAMIC UI, FORMATTING & INTERACTIVITY (FOLDER: 05_UI_And_Formatting)
+// =============================================================================
+
+// Dynamic KPI Title based on User Slicer Selection
+Dynamic KPI Header = 
+VAR SelectedRegion = SELECTEDVALUE ( Dim_Geography[Region], "All Regions" )
+VAR SelectedYear = SELECTEDVALUE ( Dim_Date[Year], "2015-2018" )
+RETURN
+    "Sales & Profit Intelligence: " & SelectedRegion & " (" & SelectedYear & ")"
+
+// Conditional Formatting Color for Profit Margin % (Benchmark: 12.0%)
+Margin Status Color = 
+SWITCH (
+    TRUE (),
+    [Profit Margin %] >= 0.12, "#27AE60",   -- Healthy Green
+    [Profit Margin %] >= 0.05, "#F39C12",   -- Warning Amber
+    "#E74C3C"                              -- Danger Red (Loss/Critical)
+)
+
+// Dynamic Metric Selector (For Parameterized Visuals)
+Selected Metric Value = 
+VAR MetricChoice = SELECTEDVALUE ( 'Metric_Selector'[Metric_Name], "Sales" )
+RETURN
+    SWITCH (
+        MetricChoice,
+        "Sales", [Total Sales],
+        "Profit", [Total Profit],
+        "Profit Margin %", [Profit Margin %],
+        "Orders", [Total Orders],
+        [Total Sales]
+    )
